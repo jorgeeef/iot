@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'services/mqtt_service.dart';
+import 'services/database_service.dart';
 import 'models/sensor_data.dart';
+import 'screens/history_screen.dart';
 
 void main() {
   runApp(const MyApp());
@@ -103,14 +105,44 @@ class SensorDataScreen extends StatefulWidget {
 
 class _SensorDataScreenState extends State<SensorDataScreen> {
   final MQTTService _mqttService = MQTTService();
+  final DatabaseService _databaseService = DatabaseService();
   SensorData? _sensorData;
   bool _isRefreshing = false;
   StreamSubscription? _dataSubscription;
+  Timer? _saveTimer;
+  DateTime? _lastSaveTime;
 
   @override
   void initState() {
     super.initState();
     _connectMQTT();
+    _startSaveTimer();
+  }
+
+  void _startSaveTimer() {
+    _saveTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      if (_sensorData != null) {
+        _saveCurrentData();
+      }
+    });
+  }
+
+  Future<void> _saveCurrentData() async {
+    if (_sensorData == null) return;
+    
+    final now = DateTime.now();
+    if (_lastSaveTime != null && 
+        now.difference(_lastSaveTime!) < const Duration(seconds: 10)) {
+      return;
+    }
+
+    try {
+      await _databaseService.saveSensorData(_sensorData!);
+      _lastSaveTime = now;
+      print('Data saved to database at ${now.toString()}');
+    } catch (e) {
+      print('Error saving data to database: $e');
+    }
   }
 
   Future<void> _connectMQTT() async {
@@ -138,31 +170,9 @@ class _SensorDataScreenState extends State<SensorDataScreen> {
     }
   }
 
-  Future<void> _refreshData() async {
-    try {
-      setState(() {
-        _isRefreshing = true;
-      });
-      
-      // Cancel existing subscription
-      await _dataSubscription?.cancel();
-      _dataSubscription = null;
-      
-      // Disconnect and reconnect
-      await _mqttService.disconnect();
-      await _connectMQTT();
-    } catch (e) {
-      print('Error refreshing data: $e');
-      if (mounted) {
-        setState(() {
-          _isRefreshing = false;
-        });
-      }
-    }
-  }
-
   @override
   void dispose() {
+    _saveTimer?.cancel();
     _dataSubscription?.cancel();
     _mqttService.disconnect();
     super.dispose();
@@ -177,18 +187,14 @@ class _SensorDataScreenState extends State<SensorDataScreen> {
         foregroundColor: Colors.white,
         actions: [
           IconButton(
-            icon: _isRefreshing
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                    ),
-                  )
-                : const Icon(Icons.refresh),
-            onPressed: _isRefreshing ? null : _refreshData,
-            tooltip: 'Refresh Data',
+            icon: const Icon(Icons.history),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const HistoryScreen()),
+              );
+            },
+            tooltip: 'View History',
           ),
           const SizedBox(width: 8),
         ],
